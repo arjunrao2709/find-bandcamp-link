@@ -269,24 +269,44 @@
       white-space: nowrap;
     }
 
-    .yt-info-bar {
+    .info-bar {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 14px 18px;
       margin-bottom: 16px;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 10px;
       font-size: 0.9rem;
     }
 
-    .yt-info-bar svg {
+    .info-bar svg {
       flex-shrink: 0;
-      color: #ff4444;
+      margin-top: 2px;
     }
 
-    .yt-info-bar .yt-label {
+    .info-bar .info-label {
+      color: var(--text-muted);
+      margin-right: 4px;
+    }
+
+    .parsed-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .parsed-tag {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 0.78rem;
+    }
+
+    .parsed-tag span {
       color: var(--text-muted);
       margin-right: 4px;
     }
@@ -543,7 +563,7 @@
         <div class="state-display">
           <div class="state-icon">😕</div>
           <div class="state-title">No results found</div>
-          <div class="state-subtitle">Couldn't find "${escapeHtml(data.query)}" on Bandcamp. Try a different search term.</div>
+          <div class="state-subtitle">Couldn't find <strong>${escapeHtml(data.query)}</strong> on Bandcamp. Try rephrasing — e.g. <em>Artist – Song</em>, or just the artist name.</div>
         </div>`;
       return;
     }
@@ -554,12 +574,21 @@
         <div class="query-pill" title="${escapeHtml(data.query)}">${escapeHtml(data.query)}</div>
       </div>`;
 
-    if (data.youtubeInfo) {
+    if (data.youtubeInfo || (data.artist && data.track)) {
+      const tagsHtml = [
+        data.artist ? `<div class="parsed-tag"><span>artist</span>${escapeHtml(data.artist)}</div>` : '',
+        data.track  ? `<div class="parsed-tag"><span>track</span>${escapeHtml(data.track)}</div>`  : '',
+      ].filter(Boolean).join('');
+
       html += `
-        <div class="yt-info-bar">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="#ff4444"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5a3 3 0 0 0-2.1 2.1C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1C24 15.9 24 12 24 12s0-3.9-.5-5.8z"/><polygon fill="white" points="9.7,15.5 15.8,12 9.7,8.5"/></svg>
-          <span class="yt-label">From YouTube:</span>
-          <strong>${escapeHtml(data.youtubeInfo.title)}</strong>
+        <div class="info-bar">
+          ${data.youtubeInfo
+            ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="#ff4444"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5a3 3 0 0 0-2.1 2.1C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1C24 15.9 24 12 24 12s0-3.9-.5-5.8z"/><polygon fill="white" points="9.7,15.5 15.8,12 9.7,8.5"/></svg>`
+            : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`}
+          <div>
+            ${data.youtubeInfo ? `<div><span class="info-label">YouTube:</span><strong>${escapeHtml(data.youtubeInfo.title)}</strong></div>` : ''}
+            ${tagsHtml ? `<div class="parsed-tags">${tagsHtml}</div>` : ''}
+          </div>
         </div>`;
     }
 
@@ -567,15 +596,14 @@
 
     for (const r of data.results) {
       const cleanLink = r.link.split('?')[0];
+      const domain = (() => { try { return new URL(r.link).hostname; } catch { return ''; } })();
       html += `
         <a class="result-item" href="${escapeHtml(r.link)}" target="_blank" rel="noopener noreferrer">
           <div class="result-art">
-            ${r.imageUrl
-              ? `<img src="${escapeHtml(r.imageUrl)}" alt="artwork" loading="lazy" onerror="this.parentElement.innerHTML='<span class=result-art-placeholder>${typeIcon(r.type)}</span>'">`
-              : `<span class="result-art-placeholder">${typeIcon(r.type)}</span>`}
+            <span class="result-art-placeholder">${typeIcon(r.type)}</span>
           </div>
           <div class="result-info">
-            <div class="result-type">${escapeHtml(r.type || 'TRACK')}</div>
+            <div class="result-type">${escapeHtml(r.type || 'PAGE')} · ${escapeHtml(domain)}</div>
             <div class="result-title">${escapeHtml(r.title)}</div>
             ${r.subhead ? `<div class="result-subhead">${escapeHtml(r.subhead)}</div>` : ''}
           </div>

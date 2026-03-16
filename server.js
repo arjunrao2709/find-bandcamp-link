@@ -9,15 +9,16 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Extract YouTube video ID from various URL formats
+// ── YouTube helpers ────────────────────────────────────────────────────────────
+
 function extractYouTubeId(url) {
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
     /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
   ];
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
+  for (const p of patterns) {
+    const m = url.match(p);
+    if (m) return m[1];
   }
   return null;
 }
@@ -26,7 +27,6 @@ function isYouTubeUrl(input) {
   return /youtube\.com|youtu\.be/.test(input);
 }
 
-// Get video title and artist from YouTube oEmbed API
 async function getYouTubeInfo(videoId) {
   const url = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
   const res = await fetch(url, {
@@ -38,99 +38,131 @@ async function getYouTubeInfo(videoId) {
   return { title: data.title, channel: data.author_name };
 }
 
-// Clean up a YouTube title to make a better Bandcamp search query
-function cleanYouTubeTitle(title) {
-  return title
-    .replace(/\(Official\s*(Music\s*)?Video\)/gi, '')
-    .replace(/\[Official\s*(Music\s*)?Video\]/gi, '')
-    .replace(/\(Official\s*Audio\)/gi, '')
-    .replace(/\[Official\s*Audio\]/gi, '')
-    .replace(/\(Lyric\s*Video\)/gi, '')
-    .replace(/\[Lyric\s*Video\]/gi, '')
-    .replace(/\(Lyrics\)/gi, '')
-    .replace(/\[Lyrics\]/gi, '')
-    .replace(/\(HD\)/gi, '')
-    .replace(/\[HD\]/gi, '')
-    .replace(/\(HQ\)/gi, '')
-    .replace(/\[HQ\]/gi, '')
-    .replace(/\bfeat\..*$/i, '')
-    .replace(/\bft\..*$/i, '')
-    .trim();
+// Strip noise from a YouTube video title and extract artist + track components
+function parseYouTubeTitle(title, channel) {
+  // Remove common suffixes like (Official Video), [Lyrics], etc.
+  const noise = [
+    /\(?\[?official\s*(music\s*)?video\]?\)?/gi,
+    /\(?\[?official\s*audio\]?\)?/gi,
+    /\(?\[?lyric\s*video\]?\)?/gi,
+    /\(?\[?lyrics\]?\)?/gi,
+    /\(?\[?visuali[sz]er\]?\)?/gi,
+    /\(?\[?hd\]?\)?/gi,
+    /\(?\[?hq\]?\)?/gi,
+    /\(?\[?4k\]?\)?/gi,
+    /\(?\[?audio\]?\)?/gi,
+    /\(?\[?remastered.*?\]?\)?/gi,
+    /\(?\[?live.*?\]?\)?/gi,
+    /\(?\[?full\s*album\]?\)?/gi,
+    /feat\.\s*[^([\-]+/gi,
+    /ft\.\s*[^([\-]+/gi,
+  ];
+  let clean = title;
+  for (const re of noise) clean = clean.replace(re, '');
+  clean = clean.replace(/\s{2,}/g, ' ').trim().replace(/[-–|]+$/, '').trim();
+
+  // Try to split "Artist - Track" or "Artist: Track"
+  const dashMatch = clean.match(/^(.+?)\s*[-–]\s*(.+)$/);
+  if (dashMatch) {
+    return { artist: dashMatch[1].trim(), track: dashMatch[2].trim() };
+  }
+
+  // Fall back: use channel name as artist (strip " - Topic" suffix from auto-generated channels)
+  const artist = channel.replace(/\s*-\s*Topic\s*$/i, '').trim();
+  return { artist, track: clean };
 }
 
-// Search Bandcamp and return top results
-async function searchBandcamp(query) {
-  const encoded = encodeURIComponent(query);
-  const url = `https://bandcamp.com/search?q=${encoded}&item_type=t`;
+// ── DuckDuckGo search ──────────────────────────────────────────────────────────
 
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
-    },
-    timeout: 10000,
-  });
+const DDG_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': 'https://duckduckgo.com/',
+};
 
-  if (!res.ok) throw new Error(`Bandcamp search failed: ${res.status}`);
+async function ddgSearch(query) {
+  const q = encodeURIComponent(query);
+  const url = `https://html.duckduckgo.com/html/?q=${q}`;
+  const res = await fetch(url, { headers: DDG_HEADERS, timeout: 12000 });
+  if (!res.ok) throw new Error(`DDG search failed: ${res.status}`);
   const html = await res.text();
   const $ = cheerio.load(html);
 
   const results = [];
-
-  $('.searchresult').each((i, el) => {
+  $('.result').each((_, el) => {
     const $el = $(el);
-    const type = $el.find('.result-info .itemtype').text().trim().toUpperCase();
-    const heading = $el.find('.result-info .heading a');
-    const title = heading.text().trim();
-    const link = heading.attr('href');
-    const subhead = $el.find('.result-info .subhead').text().trim();
-    const imageUrl = $el.find('.art img').attr('src') || $el.find('.art img').attr('data-src');
+    const titleEl = $el.find('.result__a').first();
+    const title = titleEl.text().trim();
+    const href = titleEl.attr('href');
+    const snippet = $el.find('.result__snippet').text().trim();
 
-    if (title && link) {
-      results.push({ type, title, link, subhead, imageUrl });
+    // DDG wraps URLs — extract the actual URL from the uddg param or direct href
+    let link = href || '';
+    if (link.includes('uddg=')) {
+      try { link = decodeURIComponent(link.match(/uddg=([^&]+)/)[1]); } catch {}
+    }
+
+    if (title && link && link.includes('bandcamp.com')) {
+      results.push({ title, link, snippet });
     }
   });
 
   return results;
 }
 
-// Also search Bandcamp for artists/albums if track search yields nothing
-async function searchBandcampAll(query) {
-  const encoded = encodeURIComponent(query);
-  const url = `https://bandcamp.com/search?q=${encoded}`;
+// ── Classify and enrich results ────────────────────────────────────────────────
 
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
-    },
-    timeout: 10000,
-  });
-
-  if (!res.ok) throw new Error(`Bandcamp search failed: ${res.status}`);
-  const html = await res.text();
-  const $ = cheerio.load(html);
-
-  const results = [];
-
-  $('.searchresult').each((i, el) => {
-    const $el = $(el);
-    const type = $el.find('.result-info .itemtype').text().trim().toUpperCase();
-    const heading = $el.find('.result-info .heading a');
-    const title = heading.text().trim();
-    const link = heading.attr('href');
-    const subhead = $el.find('.result-info .subhead').text().trim();
-    const imageUrl = $el.find('.art img').attr('src') || $el.find('.art img').attr('data-src');
-
-    if (title && link) {
-      results.push({ type, title, link, subhead, imageUrl });
-    }
-  });
-
-  return results;
+function classifyBandcampUrl(url) {
+  if (/\/track\//.test(url)) return 'TRACK';
+  if (/\/album\//.test(url)) return 'ALBUM';
+  if (/bandcamp\.com\/?$/.test(url) || /bandcamp\.com\/music/.test(url)) return 'ARTIST';
+  // subdomain-only URLs like https://artist.bandcamp.com
+  if (/^https?:\/\/[^.]+\.bandcamp\.com\/?$/.test(url)) return 'ARTIST';
+  return 'PAGE';
 }
+
+// ── Main search strategy ───────────────────────────────────────────────────────
+
+async function findOnBandcamp(artist, track) {
+  const queries = [];
+
+  if (artist && track) {
+    // Most specific first
+    queries.push(`site:bandcamp.com/track "${artist}" "${track}"`);
+    queries.push(`site:bandcamp.com "${artist}" "${track}"`);
+    queries.push(`site:bandcamp.com ${artist} ${track}`);
+  } else if (artist) {
+    queries.push(`site:bandcamp.com "${artist}"`);
+    queries.push(`site:bandcamp.com ${artist}`);
+  } else if (track) {
+    queries.push(`site:bandcamp.com "${track}"`);
+    queries.push(`site:bandcamp.com ${track}`);
+  }
+
+  for (const q of queries) {
+    let results;
+    try {
+      results = await ddgSearch(q);
+    } catch (err) {
+      console.warn(`DDG query failed (${q}):`, err.message);
+      continue;
+    }
+
+    if (results.length > 0) {
+      // Annotate each result with a type based on URL shape
+      return results.map(r => ({
+        ...r,
+        type: classifyBandcampUrl(r.link),
+        subhead: r.snippet,
+      }));
+    }
+  }
+
+  return [];
+}
+
+// ── API endpoint ───────────────────────────────────────────────────────────────
 
 app.post('/api/find', async (req, res) => {
   const { input } = req.body;
@@ -139,34 +171,38 @@ app.post('/api/find', async (req, res) => {
   }
 
   try {
-    let searchQuery = input.trim();
+    let artist = null;
+    let track = null;
     let youtubeInfo = null;
+    const raw = input.trim();
 
-    if (isYouTubeUrl(input)) {
-      const videoId = extractYouTubeId(input);
-      if (!videoId) {
-        return res.status(400).json({ error: 'Could not extract YouTube video ID from URL' });
-      }
+    if (isYouTubeUrl(raw)) {
+      const videoId = extractYouTubeId(raw);
+      if (!videoId) return res.status(400).json({ error: 'Could not extract YouTube video ID' });
       youtubeInfo = await getYouTubeInfo(videoId);
-      searchQuery = cleanYouTubeTitle(youtubeInfo.title);
-
-      // If the title doesn't include the channel name, prepend it for better search
-      const channelClean = youtubeInfo.channel.replace(/\s*-\s*Topic$/i, '').trim();
-      if (!searchQuery.toLowerCase().includes(channelClean.toLowerCase())) {
-        searchQuery = `${channelClean} ${searchQuery}`;
+      const parsed = parseYouTubeTitle(youtubeInfo.title, youtubeInfo.channel);
+      artist = parsed.artist;
+      track = parsed.track;
+    } else {
+      // Plain text: try to split on " - " or ": " as "artist - track"
+      const dashMatch = raw.match(/^(.+?)\s*[-–:]\s*(.+)$/);
+      if (dashMatch) {
+        artist = dashMatch[1].trim();
+        track = dashMatch[2].trim();
+      } else {
+        // Treat the whole thing as a freeform query
+        track = raw;
       }
     }
 
-    // Try track-specific search first
-    let results = await searchBandcamp(searchQuery);
+    const results = await findOnBandcamp(artist, track);
 
-    // If no track results, fall back to general search
-    if (results.length === 0) {
-      results = await searchBandcampAll(searchQuery);
-    }
+    const searchQuery = [artist, track].filter(Boolean).join(' – ');
 
     res.json({
       query: searchQuery,
+      artist,
+      track,
       youtubeInfo,
       results: results.slice(0, 8),
     });
