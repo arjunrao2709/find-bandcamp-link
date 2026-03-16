@@ -230,6 +230,38 @@
       color: var(--accent);
     }
 
+    /* Search type selector */
+    .type-selector {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .type-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 16px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      font-family: inherit;
+    }
+
+    .type-btn:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    .type-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+
     /* Results */
     #results-section {
       width: 100%;
@@ -492,6 +524,13 @@
       ></textarea>
     </div>
 
+    <div class="type-selector" id="type-selector">
+      <button class="type-btn active" data-type="auto">Auto</button>
+      <button class="type-btn" data-type="track">Track</button>
+      <button class="type-btn" data-type="artist">Artist</button>
+      <button class="type-btn" data-type="label">Label</button>
+    </div>
+
     <button class="search-btn" id="search-btn">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
@@ -499,12 +538,13 @@
       Find on Bandcamp
     </button>
 
-    <div class="examples">
+    <div class="examples" id="examples-bar">
       <span class="examples-label">Try:</span>
-      <span class="example-chip" data-query="Radiohead Creep">Radiohead – Creep</span>
-      <span class="example-chip" data-query="Bon Iver Holocene">Bon Iver – Holocene</span>
-      <span class="example-chip" data-query="Tame Impala">Tame Impala</span>
-      <span class="example-chip" data-query="Beach House Space Song">Beach House – Space Song</span>
+      <span class="example-chip" data-query="Radiohead - Creep" data-type="track">Radiohead – Creep</span>
+      <span class="example-chip" data-query="Bon Iver - Holocene" data-type="track">Bon Iver – Holocene</span>
+      <span class="example-chip" data-query="Tame Impala" data-type="artist">Tame Impala</span>
+      <span class="example-chip" data-query="Warp Records" data-type="label">Warp Records</span>
+      <span class="example-chip" data-query="Sub Pop" data-type="label">Sub Pop</span>
     </div>
   </div>
 
@@ -519,11 +559,40 @@
   const input = document.getElementById('search-input');
   const btn = document.getElementById('search-btn');
   const resultsSection = document.getElementById('results-section');
+  let searchType = 'auto';
+
+  // Type selector
+  document.querySelectorAll('.type-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.type-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      searchType = b.dataset.type;
+      updatePlaceholder();
+    });
+  });
+
+  function updatePlaceholder() {
+    const placeholders = {
+      auto:   'YouTube link, song name, or artist…',
+      track:  'Artist – Track name, or just a track name…',
+      artist: 'Artist name…',
+      label:  'Record label name…',
+    };
+    input.placeholder = placeholders[searchType] || placeholders.auto;
+  }
 
   // Example chips
   document.querySelectorAll('.example-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       input.value = chip.dataset.query;
+      // Switch type to match the chip's type
+      if (chip.dataset.type) {
+        document.querySelectorAll('.type-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.type === chip.dataset.type);
+        });
+        searchType = chip.dataset.type;
+        updatePlaceholder();
+      }
       input.focus();
       doSearch();
     });
@@ -574,8 +643,9 @@
         <div class="query-pill" title="${escapeHtml(data.query)}">${escapeHtml(data.query)}</div>
       </div>`;
 
-    if (data.youtubeInfo || (data.artist && data.track)) {
+    if (data.youtubeInfo || data.artist || data.track || data.label) {
       const tagsHtml = [
+        data.label  ? `<div class="parsed-tag"><span>label</span>${escapeHtml(data.label)}</div>`  : '',
         data.artist ? `<div class="parsed-tag"><span>artist</span>${escapeHtml(data.artist)}</div>` : '',
         data.track  ? `<div class="parsed-tag"><span>track</span>${escapeHtml(data.track)}</div>`  : '',
       ].filter(Boolean).join('');
@@ -647,7 +717,7 @@
       const res = await fetch('/api/find', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: query }),
+        body: JSON.stringify({ input: query, searchType }),
       });
 
       const data = await res.json();

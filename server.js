@@ -124,20 +124,46 @@ function classifyBandcampUrl(url) {
 
 // ── Main search strategy ───────────────────────────────────────────────────────
 
-async function findOnBandcamp(artist, track) {
+// searchType: 'auto' | 'track' | 'artist' | 'label'
+async function findOnBandcamp(artist, track, searchType = 'auto') {
   const queries = [];
 
-  if (artist && track) {
-    // Most specific first
-    queries.push(`site:bandcamp.com/track "${artist}" "${track}"`);
-    queries.push(`site:bandcamp.com "${artist}" "${track}"`);
-    queries.push(`site:bandcamp.com ${artist} ${track}`);
-  } else if (artist) {
-    queries.push(`site:bandcamp.com "${artist}"`);
-    queries.push(`site:bandcamp.com ${artist}`);
-  } else if (track) {
-    queries.push(`site:bandcamp.com "${track}"`);
-    queries.push(`site:bandcamp.com ${track}`);
+  if (searchType === 'label') {
+    const name = artist || track;
+    if (name) {
+      queries.push(`site:bandcamp.com "${name}" label`);
+      queries.push(`site:bandcamp.com "${name}" records`);
+      queries.push(`site:bandcamp.com "${name}"`);
+    }
+  } else if (searchType === 'artist') {
+    const name = artist || track;
+    if (name) {
+      queries.push(`site:bandcamp.com "${name}" music`);
+      queries.push(`site:bandcamp.com "${name}"`);
+    }
+  } else if (searchType === 'track') {
+    if (artist && track) {
+      queries.push(`site:bandcamp.com/track "${artist}" "${track}"`);
+      queries.push(`site:bandcamp.com "${artist}" "${track}"`);
+      queries.push(`site:bandcamp.com ${artist} ${track}`);
+    } else {
+      const name = artist || track;
+      queries.push(`site:bandcamp.com/track "${name}"`);
+      queries.push(`site:bandcamp.com ${name}`);
+    }
+  } else {
+    // auto: use whatever context we have
+    if (artist && track) {
+      queries.push(`site:bandcamp.com/track "${artist}" "${track}"`);
+      queries.push(`site:bandcamp.com "${artist}" "${track}"`);
+      queries.push(`site:bandcamp.com ${artist} ${track}`);
+    } else if (artist) {
+      queries.push(`site:bandcamp.com "${artist}"`);
+      queries.push(`site:bandcamp.com ${artist}`);
+    } else if (track) {
+      queries.push(`site:bandcamp.com "${track}"`);
+      queries.push(`site:bandcamp.com ${track}`);
+    }
   }
 
   for (const q of queries) {
@@ -150,7 +176,6 @@ async function findOnBandcamp(artist, track) {
     }
 
     if (results.length > 0) {
-      // Annotate each result with a type based on URL shape
       return results.map(r => ({
         ...r,
         type: classifyBandcampUrl(r.link),
@@ -165,7 +190,7 @@ async function findOnBandcamp(artist, track) {
 // ── API endpoint ───────────────────────────────────────────────────────────────
 
 app.post('/api/find', async (req, res) => {
-  const { input } = req.body;
+  const { input, searchType = 'auto' } = req.body;
   if (!input || !input.trim()) {
     return res.status(400).json({ error: 'Input is required' });
   }
@@ -173,36 +198,59 @@ app.post('/api/find', async (req, res) => {
   try {
     let artist = null;
     let track = null;
+    let label = null;
     let youtubeInfo = null;
     const raw = input.trim();
 
-    if (isYouTubeUrl(raw)) {
-      const videoId = extractYouTubeId(raw);
-      if (!videoId) return res.status(400).json({ error: 'Could not extract YouTube video ID' });
-      youtubeInfo = await getYouTubeInfo(videoId);
-      const parsed = parseYouTubeTitle(youtubeInfo.title, youtubeInfo.channel);
-      artist = parsed.artist;
-      track = parsed.track;
-    } else {
-      // Plain text: try to split on " - " or ": " as "artist - track"
-      const dashMatch = raw.match(/^(.+?)\s*[-–:]\s*(.+)$/);
+    if (searchType === 'label') {
+      label = raw;
+    } else if (searchType === 'artist') {
+      artist = raw;
+    } else if (searchType === 'track') {
+      const dashMatch = raw.match(/^(.+?)\s*[-–]\s*(.+)$/);
       if (dashMatch) {
         artist = dashMatch[1].trim();
         track = dashMatch[2].trim();
       } else {
-        // Treat the whole thing as a freeform query
         track = raw;
+      }
+    } else {
+      // auto
+      if (isYouTubeUrl(raw)) {
+        const videoId = extractYouTubeId(raw);
+        if (!videoId) return res.status(400).json({ error: 'Could not extract YouTube video ID' });
+        youtubeInfo = await getYouTubeInfo(videoId);
+        const parsed = parseYouTubeTitle(youtubeInfo.title, youtubeInfo.channel);
+        artist = parsed.artist;
+        track = parsed.track;
+      } else {
+        const dashMatch = raw.match(/^(.+?)\s*[-–]\s*(.+)$/);
+        if (dashMatch) {
+          artist = dashMatch[1].trim();
+          track = dashMatch[2].trim();
+        } else {
+          track = raw;
+        }
       }
     }
 
-    const results = await findOnBandcamp(artist, track);
+    const results = await findOnBandcamp(
+      searchType === 'label' ? label : artist,
+      searchType === 'label' ? null : track,
+      searchType
+    );
 
-    const searchQuery = [artist, track].filter(Boolean).join(' – ');
+    const queryParts = searchType === 'label'
+      ? [label]
+      : [artist, track];
+    const searchQuery = queryParts.filter(Boolean).join(' – ');
 
     res.json({
       query: searchQuery,
+      searchType,
       artist,
       track,
+      label,
       youtubeInfo,
       results: results.slice(0, 8),
     });
