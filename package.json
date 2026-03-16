@@ -1,0 +1,15 @@
+{
+  "name": "find-bandcamp-link",
+  "version": "1.0.0",
+  "description": "Find Bandcamp links from YouTube URLs or song/artist names",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  }
+}
